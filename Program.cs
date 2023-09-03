@@ -39,6 +39,13 @@ namespace StatusBot
 
         public async Task Client_Ready()
         {
+            IReadOnlyCollection<SocketApplicationCommand> commands = _client.GetGuild(1143675942535974993).GetApplicationCommandsAsync().Result;
+
+            foreach (SocketApplicationCommand command in commands)
+            {
+                await command.DeleteAsync();
+            }
+
             // Next, lets create our slash command builder. This is like the embed builder but for slash commands.
             var serversCommand = new SlashCommandBuilder();
 
@@ -47,6 +54,21 @@ namespace StatusBot
 
             // Descriptions can have a max length of 100.
             serversCommand.WithDescription("A list of our servers.");
+            serversCommand.AddOption(new SlashCommandOptionBuilder()
+                .WithType(ApplicationCommandOptionType.String)
+                .WithName("prefix")
+                .WithDescription("Set to none to not filter by prefix. Default: Bot server prefix.")
+                .WithRequired(false));
+            serversCommand.AddOption(new SlashCommandOptionBuilder()
+                .WithType(ApplicationCommandOptionType.String)
+                .WithName("map")
+                .WithDescription("Set to none to not filter by map. (Default)")
+                .WithRequired(false));
+            serversCommand.AddOption(new SlashCommandOptionBuilder()
+                .WithType(ApplicationCommandOptionType.String)
+                .WithName("gamemode")
+                .WithDescription("Set to none to not filter by gamemode. (Default)")
+                .WithRequired(false));
 
             try
             {
@@ -67,21 +89,75 @@ namespace StatusBot
         {
             if (command.CommandName == "servers")
             {
+                string namePrefix = _config.ServerNamePrefix;
+                string gamemode = "";
+                string map = "";
+
+                if (command.Data.Options.Count > 0)
+                {
+                    foreach (SocketSlashCommandDataOption option in command.Data.Options)
+                    {
+                        switch (option.Name)
+                        {
+                            case "gamemode":
+                                gamemode = (string) option.Value;
+                                break;
+                            case "map":
+                                map = (string) option.Value;
+                                break;
+                            case "prefix":
+                                namePrefix = (string) option.Value;
+                                break;
+                        }
+
+                    }
+                }
+
                 IMessageChannel channel = command.GetChannelAsync().Result;
                 IDisposable typingDisposable = channel.EnterTypingState();
 
-                List<ServerData> servers = Utils.GetOurServers();
-                string serversString = "## Our Servers\n";
+                if (namePrefix.StartsWith("none"))
+                    namePrefix = "";
 
-                foreach (ServerData server in servers)
+                List<ServerData> servers = Utils.GetServers(gamemode, namePrefix, map);
+                string serversString = "## Servers\n";
+
+                int players = 0;
+                int queuePlayers = 0;
+                int maxPlayers = 0;
+
+                Console.WriteLine(servers.Count);
+
+                int i = 0;
+
+                if (servers.Count > 0)
                 {
-                    string queueString = "";
-                    if (server.QueuePlayers > 0)
-                        queueString = " (+" + server.QueuePlayers + ")";
+                    do
+                    {
+                        ServerData server = servers.ElementAt(i);
+                        if (servers.Count <= 10)
+                        {
+                            string queueString = "";
+                            if (server.QueuePlayers > 0)
+                                queueString = " (+" + server.QueuePlayers + ")";
 
-                    serversString += "\n";
-                    serversString += $"[**{server.Name}**]: {server.Players}{queueString}/{server.MaxPlayers}";
+                            serversString += "\n";
+                            serversString += $"[``{server.Name}``]: {server.Players}{queueString}/{server.MaxPlayers}";
+                        }
+
+                        players += server.Players;
+                        queuePlayers += server.QueuePlayers;
+                        maxPlayers += server.MaxPlayers;
+
+                        i++;
+                    } while (i < servers.Count);
+                } else
+                {
+                    serversString += $"\nNo servers found. {namePrefix}";
                 }
+
+                if (servers.Count > 5)
+                    serversString += $"There are over **{servers.Count}** servers that matched your filters.\nPlayers: {players} (+{queuePlayers})/{maxPlayers}";
 
                 await command.RespondAsync(serversString);
                 typingDisposable.Dispose();
@@ -100,7 +176,7 @@ namespace StatusBot
 
                     int players = 0;
                     int queuePlayers = 0;
-                    int maxPlayers = 0;
+                    int maxPlayers = 0; 
 
                     foreach (ServerData server in ourServers)
                     {

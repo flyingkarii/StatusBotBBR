@@ -21,5 +21,18 @@ namespace StatusBot
             return ourServers;
         }
 
+        public static List<ServerData> GetServers(string withGamemode = "", string withNamePrefix = "", string? withMap = "")
+        {
+            ServerList serverList = Servers.GetServerList();
+            List<ServerData> result;
+
+            result = serverList.serverData.Where((ServerData data) =>
+                data.Gamemode.ToLower().StartsWith(withGamemode.ToLower())
+                && data.Name.ToLower().StartsWith(withNamePrefix.ToLower())
+                && data.Map.ToLower().StartsWith(withMap.ToLower())).ToList();
+
+            return result;
+        }
+
     }
 }
