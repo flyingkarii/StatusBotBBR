@@ -41,5 +41,10 @@ namespace StatusBot
     {
         public string ServerNamePrefix = "yourserversprefix";
         public string BotToken = "yourtoken";
+
+        public int DelayMilliseconds = 2500;
+        public ulong GuildId = 0;
+        public ulong ChannelId = 0;
+        public ulong MessageToEdit = 0;
     }
 }

@@ -1,8 +1,8 @@
 ﻿using Discord;
-using Discord.Commands;
 using Discord.Net;
+using Discord.Rest;
 using Discord.WebSocket;
-using Newtonsoft.Json;
+using Timer = System.Timers.Timer;
 
 namespace StatusBot
 {
@@ -11,40 +11,62 @@ namespace StatusBot
         private static BotConfig _config;
         private DiscordSocketClient _client;
         private JsonManager _manager;
-        private Thread _thread;
-        private CancellationTokenSource _tokenSource;
+        private Timer _timer;
+        private RestUserMessage _message;
+        private List<ServerData> _servers;
 
         public static Task Main(string[] args) => new Program().MainAsync();
 
         public async Task MainAsync()
         {
             DiscordSocketConfig socketConfig = new DiscordSocketConfig();
-            socketConfig.GatewayIntents = GatewayIntents.MessageContent;
+
+            socketConfig.GatewayIntents = GatewayIntents.MessageContent | GatewayIntents.Guilds | GatewayIntents.GuildMessages;
             _client = new DiscordSocketClient(socketConfig);
-            _tokenSource = new CancellationTokenSource();
 
             _client.Log += Log;
             _client.Ready += Client_Ready;
+            _client.Disconnected += Disconnected;
             _client.SlashCommandExecuted += SlashCommandHandler;
             _manager = new JsonManager();
             _config = _manager.GetBotConfig();
 
+            if (_config.BotToken == "yourtoken")
+            {
+                Console.WriteLine("Token is default! Please fill out the config and re-run.");
+                await Task.Delay(-1);
+                return;
+            }
+
+            _servers = Utils.GetOurServers();
+
+            await _client.SetGameAsync(_servers.Count.ToString() + " servers.", null, ActivityType.Watching);
             await _client.LoginAsync(TokenType.Bot, _config.BotToken);
             await _client.StartAsync();
 
-            BeginLoop();
-
+            await _client.SetStatusAsync(UserStatus.Idle);
             await Task.Delay(-1);
+        }
+
+        private void SetTimer()
+        {
+            Console.WriteLine($"Timer started for every {_config.DelayMilliseconds / 1000} seconds.");
+            _timer = new Timer();
+            _timer.Elapsed += async (s, o) => UpdatePresence();
+            _timer.AutoReset = true;
+            _timer.Interval = _config.DelayMilliseconds;
+            _timer.Enabled = true;
+        }
+
+        public async Task Disconnected(Exception e)
+        {
+            if (_message != null)
+                await _message.DeleteAsync();
         }
 
         public async Task Client_Ready()
         {
             IReadOnlyCollection<SocketApplicationCommand> commands = _client.GetGuild(1143675942535974993).GetApplicationCommandsAsync().Result;
-
-            foreach (SocketApplicationCommand command in commands)
-            {
-                await command.DeleteAsync();
-            }
 
             // Next, lets create our slash command builder. This is like the embed builder but for slash commands.
             var serversCommand = new SlashCommandBuilder();
@@ -70,19 +92,9 @@ namespace StatusBot
                 .WithDescription("Set to none to not filter by gamemode. (Default)")
                 .WithRequired(false));
 
-            try
-            {
-                // Now that we have our builder, we can call the CreateApplicationCommandAsync method to make our slash command.
-                await _client.CreateGlobalApplicationCommandAsync(serversCommand.Build());
-            }
-            catch (ApplicationCommandException exception)
-            {
-                // If our command was invalid, we should catch an ApplicationCommandException. This exception contains the path of the error as well as the error message. You can serialize the Error field in the exception to get a visual of where your error is.
-                var json = JsonConvert.SerializeObject(exception.Errors, Formatting.Indented);
+            _message = (RestUserMessage) await _client.GetGuild(_config.GuildId).GetTextChannel(_config.ChannelId).GetMessageAsync(_config.MessageToEdit);
 
-                // You can send this error somewhere or just print it to the console, for this example we're just going to print it.
-                Console.WriteLine(json);
-            }
+            SetTimer();
         }
 
         private async Task SlashCommandHandler(SocketSlashCommand command)
@@ -126,8 +138,6 @@ namespace StatusBot
                 int queuePlayers = 0;
                 int maxPlayers = 0;
 
-                Console.WriteLine(servers.Count);
-
                 int i = 0;
 
                 if (servers.Count > 0)
@@ -164,34 +174,55 @@ namespace StatusBot
             }
         }
 
-        public void BeginLoop()
+        public async void UpdatePresence()
         {
-            _thread = new Thread(() =>
-            {
-                Thread.CurrentThread.IsBackground = true;
+            List<ServerData> servers = Utils.GetOurServers();
+            string queueString = "";
 
+            int players = 0;
+            int queuePlayers = 0;
+            int maxPlayers = 0;
+
+            foreach (ServerData server in servers)
+            {
+                players += server.Players;
+                queuePlayers += server.QueuePlayers;
+                maxPlayers += server.MaxPlayers;
+            }
+
+            string serversString = "## Servers\n";
+
+            int i = 0;
+
+            if (servers.Count > 0)
+            {
                 do
                 {
-                    List<ServerData> ourServers = Utils.GetOurServers();
+                    queueString = "";
+                    ServerData server = servers.ElementAt(i);
 
-                    int players = 0;
-                    int queuePlayers = 0;
-                    int maxPlayers = 0; 
-
-                    foreach (ServerData server in ourServers)
+                    if (servers.Count <= 10)
                     {
-                        players += server.Players;
-                        queuePlayers += server.QueuePlayers;
-                        maxPlayers += server.MaxPlayers;
+                        if (server.QueuePlayers > 0)
+                            queueString = " (+" + server.QueuePlayers + ")";
+
+                        serversString += "\n";
+                        serversString += $"[``{server.Name}``]: {server.Players}{queueString}/{server.MaxPlayers}";
                     }
 
-                    string queueString = queuePlayers > 0 ? $" (+{queuePlayers})" : "";
-                    _client.SetGameAsync($"{players}{queueString}/{maxPlayers} players.", null, ActivityType.Watching);
-                    Thread.Sleep(5000);
-                } while (!_tokenSource.Token.IsCancellationRequested);
-            });
+                    i++;
+                } while (i < servers.Count);
+            }
 
-            _thread.Start();
+            queueString = queuePlayers > 0 ? $" (+{queuePlayers})" : "";
+            serversString += "\n";
+            serversString += $"Total: {players}{queueString}/{maxPlayers}";
+            serversString += $"\nUpdates every {_config.DelayMilliseconds / 1000} seconds.";
+
+            await _message.ModifyAsync(m => { m.Content = serversString; });
+            await _client.SetGameAsync($"{players}{queueString}/{maxPlayers} players.", null, ActivityType.Watching);
+
+
         }
 
         private Task Log(LogMessage msg)
